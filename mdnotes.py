@@ -23,8 +23,11 @@ from textual.widgets import (
     Static,
     TabbedContent,
     TabPane,
+    OptionList,
     TextArea,
 )
+from textual.widgets.option_list import Option
+from rich.text import Text
 
 
 DEFAULT_DIR = Path.home() / "Documents" / "notes"
@@ -60,17 +63,18 @@ class NameDialog(ModalScreen[str | None]):
     BINDINGS = [Binding("escape", "cancel", "Cancelar")]
 
     def __init__(self, folder: Path, title: str = "✨ Nueva nota",
-                 placeholder: str = "nombre-de-la-nota") -> None:
+                 placeholder: str = "nombre-de-la-nota", value: str = "") -> None:
         super().__init__()
         self.folder = folder
         self.title_text = title
         self.placeholder = placeholder
+        self.value = value
 
     def compose(self) -> ComposeResult:
         with Vertical(id="dialog"):
             yield Label(self.title_text, classes="dialog-title")
             yield Label(f"en [b]{self.folder}[/b]", classes="dialog-sub")
-            yield Input(placeholder=self.placeholder, id="name")
+            yield Input(self.value, placeholder=self.placeholder, id="name")
             with Horizontal(classes="buttons"):
                 yield Button("Crear", variant="success", id="ok")
                 yield Button("Cancelar", variant="error", id="cancel")
@@ -138,6 +142,140 @@ class DeleteDialog(ModalScreen[bool]):
         self.dismiss(event.button.id == "yes")
 
 
+MAX_RESULTS = 300
+
+
+def search_notes(root: Path, query: str) -> list[tuple[Path, int, str]]:
+    """Busca `query` (sin distinguir mayusculas) en nombres y contenido de las notas."""
+    q = query.lower()
+    hits: list[tuple[Path, int, str]] = []
+    for path in sorted(root.rglob("*")):
+        if path.suffix.lower() not in (".md", ".markdown") or any(
+            part.startswith(".") for part in path.relative_to(root).parts
+        ):
+            continue
+        if q in path.stem.lower():
+            hits.append((path, 0, ""))
+        try:
+            lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+        except OSError:
+            continue
+        for i, line in enumerate(lines):
+            if q in line.lower():
+                hits.append((path, i, line.strip()))
+                if len(hits) >= MAX_RESULTS:
+                    return hits
+    return hits
+
+
+def highlight(text: str, query: str, style: str) -> Text:
+    out = Text(text)
+    out.highlight_words([query], style=style, case_sensitive=False)
+    return out
+
+
+class SearchDialog(ModalScreen[tuple[Path, int] | None]):
+    """Busqueda de texto completo en todas las notas."""
+
+    BINDINGS = [
+        Binding("escape", "dismiss(None)", "Cerrar"),
+        Binding("down", "focus_results", show=False),
+    ]
+
+    def __init__(self, root: Path) -> None:
+        super().__init__()
+        self.root = root
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="search-dialog"):
+            yield Label("🔎 Buscar en todas las notas", classes="dialog-title")
+            yield Input(placeholder="escribí para buscar…", id="query")
+            yield Label("[#6272a4]↓ = ir a resultados · Enter = abrir · Esc = cerrar[/]",
+                        id="search-status", classes="dialog-sub")
+            yield OptionList(id="results")
+
+    def on_mount(self) -> None:
+        self.query_one(Input).focus()
+
+    def action_focus_results(self) -> None:
+        results = self.query_one(OptionList)
+        if results.option_count:
+            results.focus()
+            results.highlighted = results.highlighted or 0
+
+    @on(Input.Changed)
+    def changed(self, event: Input.Changed) -> None:
+        self.run_search(event.value.strip())
+
+    @work(exclusive=True, thread=True)
+    def run_search(self, query: str) -> None:
+        hits = search_notes(self.root, query) if len(query) >= 2 else []
+        self.app.call_from_thread(self.show_results, query, hits)
+
+    def show_results(self, query: str, hits: list[tuple[Path, int, str]]) -> None:
+        results = self.query_one(OptionList)
+        results.clear_options()
+        self.hits = hits
+        for i, (path, line, snippet) in enumerate(hits):
+            rel = str(path.relative_to(self.root))
+            label = Text()
+            label.append_text(highlight(rel, query, "bold #ff79c6"))
+            label.stylize("#8be9fd")
+            if snippet:
+                label.append(f":{line + 1}  ", style="#6272a4")
+                label.append_text(highlight(snippet[:200], query, "bold reverse #f1fa8c"))
+            else:
+                label.append("  (nombre)", style="#6272a4")
+            results.add_option(Option(label, id=str(i)))
+        status = self.query_one("#search-status", Label)
+        if len(query) < 2:
+            status.update("[#6272a4]Escribí al menos 2 letras · Esc = cerrar[/]")
+        else:
+            extra = "+" if len(hits) >= MAX_RESULTS else ""
+            status.update(f"[#50fa7b]{len(hits)}{extra} resultados[/] "
+                          "[#6272a4]· ↓ = ir a resultados · Enter = abrir[/]")
+
+    @on(Input.Submitted)
+    def submit_first(self) -> None:
+        if getattr(self, "hits", None):
+            path, line, _ = self.hits[0]
+            self.dismiss((path, line))
+
+    @on(OptionList.OptionSelected)
+    def picked(self, event: OptionList.OptionSelected) -> None:
+        path, line, _ = self.hits[int(event.option.id or 0)]
+        self.dismiss((path, line))
+
+
+def rename_path(app: App, path: Path) -> None:
+    """Pide un nombre nuevo y renombra la nota/carpeta (actualiza pestañas abiertas)."""
+    is_dir = path.is_dir()
+    current = path.name if is_dir else path.stem
+
+    def done(name: str | None) -> None:
+        if not name or name == current:
+            return
+        if not is_dir and not name.lower().endswith((".md", ".markdown")):
+            name += path.suffix or ".md"
+        target = path.parent / name
+        if target.exists():
+            app.notify(f"Ya existe {target.name}", title="Error", severity="error")
+            return
+        try:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            path.rename(target)
+        except OSError as e:
+            app.notify(str(e), title="Error", severity="error")
+            return
+        app.workspace.paths_moved(path, target)
+        if isinstance(app.screen, PickerScreen):
+            app.screen.action_reload()
+        app.notify(f"{path.name} → {target.name}", title="✏️ Renombrado")
+
+    title = "✏️ Renombrar carpeta" if is_dir else "✏️ Renombrar nota"
+    app.push_screen(NameDialog(path.parent, title, "nuevo-nombre", current), done)
+
+
 class PickerScreen(Screen):
     """Explorador de notas."""
 
@@ -145,6 +283,8 @@ class PickerScreen(Screen):
         Binding("n", "new_note", "Nueva nota"),
         Binding("c", "new_folder", "Nueva carpeta"),
         Binding("d,delete", "delete", "Eliminar"),
+        Binding("slash,ctrl+f", "search", "Buscar"),
+        Binding("f2,m", "rename", "Renombrar"),
         Binding("backspace", "go_up", "Subir carpeta"),
         Binding("r", "reload", "Recargar"),
         Binding("p", "toggle_preview", "Vista previa"),
@@ -168,6 +308,7 @@ class PickerScreen(Screen):
                     "# mdnotes\n\nMové el cursor sobre una nota para verla acá.\n\n"
                     "- **Espacio / Enter** → abrir\n- **n** → nueva nota\n"
                     "- **c** → nueva carpeta\n- **d / Supr** → eliminar\n"
+                    "- **/** → buscar en todas las notas\n- **F2 / m** → renombrar\n"
                     "- **Backspace** → carpeta superior",
                     id="preview",
                 )
@@ -265,6 +406,15 @@ class PickerScreen(Screen):
 
         self.app.push_screen(DeleteDialog(path), confirmed)
 
+    def action_search(self) -> None:
+        self.app.action_search()
+
+    def action_rename(self) -> None:
+        node = self.query_one(MdTree).cursor_node
+        if node is None or node.data is None or node.data.path == self.root:
+            return
+        rename_path(self.app, node.data.path)
+
     def _set_root(self, root: Path) -> None:
         self.root = root
         self.query_one(MdTree).path = root
@@ -340,6 +490,12 @@ class NoteEditor(Vertical):
         self.query_one(".live", Markdown).update(self.text_area.text)
         (live if reading else self.text_area).focus()
 
+    def goto_line(self, line: int) -> None:
+        if self.query_one(".live-pane").display:
+            self.toggle_reading()
+        self.text_area.move_cursor((line, 0))
+        self.text_area.scroll_cursor_visible(center=True)
+
     def focus_editor(self) -> None:
         if self.query_one(".editor-pane").display:
             self.text_area.focus()
@@ -407,6 +563,8 @@ class EditorScreen(Screen):
         Binding("alt+right", "next_tab", "Pestaña →", priority=True),
         Binding("alt+left", "prev_tab", "← Pestaña", priority=True),
         Binding("ctrl+r", "reading_mode", "Modo lectura", priority=True),
+        Binding("ctrl+f", "app.search", "Buscar", priority=True),
+        Binding("f2", "rename", "Renombrar", priority=True),
         Binding("escape", "back", "Explorador", priority=True),
     ] + [
         Binding(f"alt+{i}", f"goto_tab({i})", show=False, priority=True)
@@ -530,6 +688,25 @@ class EditorScreen(Screen):
         if n <= len(panes):
             self.tabs.active = panes[n - 1]
 
+    def action_rename(self) -> None:
+        if ed := self.current():
+            if ed.dirty:
+                ed.save()
+            rename_path(self.app, ed.path)
+
+    def paths_moved(self, old: Path, new: Path) -> None:
+        """Actualiza las pestañas cuyo archivo se renombro/movio."""
+        if not self.is_mounted:
+            return
+        old, new = old.resolve(), new.resolve()
+        for ed in self.editors():
+            if ed.path == old or old in ed.path.parents:
+                ed.path = new / ed.path.relative_to(old) if ed.path != old else new
+                ed.refresh_title()
+                self.update_tab_label(ed)
+        if (ed := self.current()) and self.app.screen is self:
+            self.app.sub_title = str(ed.path)
+
     def action_back(self) -> None:
         """Vuelve al explorador; las pestañas quedan abiertas."""
         self.app.sub_title = "Notas Markdown"
@@ -575,7 +752,15 @@ class MdNotes(App):
         border: thick #bd93f9; background: #282a36;
     }
 
-    NameDialog, ConfirmDialog, DeleteDialog, OpenNoteDialog { align: center middle; background: black 60%; }
+    #search-dialog {
+        width: 85%; height: 85%; padding: 1 2;
+        border: thick #8be9fd; background: #282a36;
+    }
+    #query { margin-bottom: 0; }
+    #results { height: 1fr; background: #1e1f29; border: round #44475a; }
+    #results:focus { border: round #8be9fd; }
+
+    NameDialog, ConfirmDialog, DeleteDialog, OpenNoteDialog, SearchDialog { align: center middle; background: black 60%; }
     #dialog {
         width: 60; height: auto; padding: 1 2;
         border: thick #ff79c6; background: #282a36;
@@ -604,6 +789,24 @@ class MdNotes(App):
         if self.screen is not self.workspace:
             self.push_screen("workspace")
         self.call_after_refresh(self.workspace.open_note, path)
+
+    def action_search(self) -> None:
+        def picked(result: tuple[Path, int] | None) -> None:
+            if result is None:
+                return
+            path, line = result
+            self.open_note(path)
+            self.call_after_refresh(
+                lambda: self.call_after_refresh(self._goto, path, line)
+            )
+
+        self.push_screen(SearchDialog(self.workspace.root), picked)
+
+    def _goto(self, path: Path, line: int) -> None:
+        for ed in self.workspace.editors():
+            if ed.path == path.resolve():
+                ed.goto_line(line)
+                ed.focus_editor()
 
     def action_show_tabs(self) -> None:
         if self.workspace.is_mounted and self.workspace.editors():

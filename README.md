@@ -22,6 +22,8 @@ Browse your notes, open them in tabs, write with syntax highlighting, and switch
 - 📁 **A colorful note browser.** It shows only folders and `.md` files, with no hidden-file noise.
 - 📝 **A Markdown editor**, with syntax highlighting, line numbers, soft wrap and familiar shortcuts (`Ctrl+S` saves; no modes to learn).
 - 👁 **Reading mode.** One keystroke renders the note: headings, lists, tables, code blocks.
+- 🔎 **Full-text search** across every note, with highlighted matches. It jumps straight to the matching line.
+- ✏️ **Rename** notes and folders. Open tabs follow the change.
 - 🗂 **Tabs**, so you can keep several notes open and jump between them.
 - 🗑 **Safe deletes.** Notes and folders go to the system trash, not into the void.
 - 🎨 **Dracula theme** out of the box.
@@ -66,6 +68,8 @@ mdnotes idea.md         # opens a note straight away
 | `n` | New note in the current folder |
 | `c` | New folder (nested paths like `a/b` work) |
 | `d` / `Delete` | Move note or folder to the trash |
+| `/` / `Ctrl+F` | Search across all notes |
+| `F2` / `m` | Rename note or folder |
 | `p` | Toggle the preview pane |
 | `t` | Go back to your open tabs |
 | `Backspace` | Go to the parent folder |
@@ -78,13 +82,15 @@ mdnotes idea.md         # opens a note straight away
 |---|---|
 | `Ctrl+S` | Save |
 | `Ctrl+R` | Toggle reading mode |
+| `Ctrl+F` | Search across all notes |
+| `F2` | Rename the current note |
 | `Ctrl+T` | Open a note in a new tab (`Ctrl+N` inside creates a new one) |
 | `Ctrl+W` | Close tab |
 | `Alt+←` / `Alt+→` | Previous / next tab |
 | `Alt+1` … `Alt+9` | Jump to tab N |
 | `Esc` | Back to the browser (tabs stay open) |
 
-In dialogs, `Enter` confirms and `Esc` cancels.
+In dialogs, `Enter` confirms and `Esc` cancels. In search, type at least 2 characters, press `↓` to move into the results and `Enter` to open one. Pressing `Enter` in the search box opens the first match.
 
 ## Development
 
@@ -108,8 +114,9 @@ The whole app is a single file, [`mdnotes.py`](mdnotes.py), built on [Textual](h
 Ideas for future work. Contributions are very welcome:
 
 - [ ] `[[wikilinks]]` between notes and backlinks
-- [ ] Full-text search across notes
-- [ ] Rename / move notes
+- [x] Full-text search across notes
+- [x] Rename notes and folders
+- [ ] Move notes between folders
 - [ ] English UI and i18n
 - [ ] Configurable notes directory and theme
 - [ ] Tags and front-matter support
