@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import os
+import shutil
+import subprocess
 import sys
 from pathlib import Path
 from typing import Iterable
@@ -789,6 +792,25 @@ class MdNotes(App):
         if self.screen is not self.workspace:
             self.push_screen("workspace")
         self.call_after_refresh(self.workspace.open_note, path)
+
+    def copy_to_clipboard(self, text: str) -> None:
+        # OSC 52 no anda en todas las terminales (p. ej. GNOME Terminal/VTE),
+        # así que también copiamos con la herramienta del sistema si existe.
+        super().copy_to_clipboard(text)
+        if os.environ.get("WAYLAND_DISPLAY"):
+            commands = [["wl-copy"]]
+        else:
+            commands = [["xclip", "-selection", "clipboard"], ["xsel", "--clipboard", "--input"]]
+        for cmd in commands:
+            if shutil.which(cmd[0]):
+                try:
+                    subprocess.Popen(
+                        cmd, stdin=subprocess.PIPE, stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL, start_new_session=True,
+                    ).communicate(text.encode("utf-8"), timeout=2)
+                except (OSError, subprocess.TimeoutExpired):
+                    continue
+                return
 
     def action_search(self) -> None:
         def picked(result: tuple[Path, int] | None) -> None:

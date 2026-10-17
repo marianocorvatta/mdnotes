@@ -47,6 +47,15 @@ pipx install git+https://github.com/marianocorvatta/mdnotes
 
 Either way you get an `mdnotes` command on your `PATH`.
 
+### Clipboard on Linux
+
+Some terminals (GNOME Terminal and other VTE-based ones, Konsole) can't pass text copied with `Ctrl+C` to the system clipboard by themselves. Install a clipboard tool and mdnotes will use it:
+
+```bash
+sudo apt install xclip         # X11 (e.g. Linux Mint, Ubuntu on Xorg)
+sudo apt install wl-clipboard  # Wayland
+```
+
 ## Usage
 
 ```bash
